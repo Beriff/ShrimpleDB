@@ -2,7 +2,7 @@
 
 namespace ShrimpleDB
 {
-	public struct ASTNode
+	public class ASTNode
 	{
 		public ParserToken Type;
 		public string Value;
@@ -15,13 +15,14 @@ namespace ShrimpleDB
 			Children = [];
 		}
 
-		public readonly void Traverse(Action<ASTNode, int> f, int foldedness)
+		public void Traverse(Action<ASTNode, int> f, int foldedness)
 		{
 			f(this, foldedness);
 			foreach (ASTNode node in Children) { node.Traverse(f, foldedness + 1); }
 		}
 
 	}
+
 	public enum ParserHint
 	{
 		ParameterList,
@@ -34,52 +35,96 @@ namespace ShrimpleDB
 		ParenthesisOpen,
 		ParenthesisClose,
 		Identifier,
-		Comma
+		Comma,
+		Number,
+		Str
+	}
+
+	public static class QLStd
+	{
+		public class FunctionInfo(Action action, ParserToken[] arguments, ParserToken? ret)
+		{
+			public Action Action = action;
+			public ParserToken[] FnArgs = arguments;
+			public ParserToken? ReturnType = ret;
+		}
+
+		public static readonly List<ASTNode> Arguments = [];
+		public static ASTNode Return;
+
+		public static readonly Dictionary<string, FunctionInfo> FuncDispatchTable = new()
+		{
+			{ 
+				"PRINT", new(() =>
+				{
+					Console.WriteLine(Arguments[0].Value);
+				}, [ParserToken.Str], null) 
+			}
+		};
 	}
 
 	public class Interpreter
 	{
 		private const string se_str = "\e[41m SYNTAX ERROR \e[0m ";
+		private const string ste_str = "\e[41m STATIC ERROR \e[0m ";
 		public List<string> LexicalAnalysis(string instruction)
 		{
+			bool string_flag = false;
+
 			string buffer = "";
 			List<string> lexemes = [];
+
+
 
 			for (int index = 0; index < instruction.Length; index++)
 			{
 				char current_character = instruction[index];
 
+				// I refuse to be controlled by the big "structured control flow"
+				// happy goto to everyone
+				#pragma warning disable S907
+
 				switch (current_character)
 				{
 					case ' ':
-						if (buffer != "")
+						if (buffer != "" && !string_flag)
 						{
 							lexemes.Add(buffer);
 							buffer = "";
 						}
+						else if (string_flag) goto default;
 						break;
 
 					case '(' or ')' or ',':
-						if (buffer != "")
+						if (buffer != "" && !string_flag)
 						{
 							lexemes.Add(buffer);
 							buffer = "";
 						}
+						else if (string_flag) goto default;
 						lexemes.Add(current_character.ToString());
 						break;
 
 					case '\n':
-						if (buffer != "")
+						if (buffer != "" && !string_flag)
 						{
 							lexemes.Add(buffer);
 							buffer = "";
 						}
+						else if (string_flag) goto default;
+						break;
+
+					case '"':
+						string_flag = !string_flag;
+						buffer += current_character;
 						break;
 
 					default:
 						buffer += current_character;
 						break;
 				}
+
+				#pragma warning restore S907
 			}
 
 			return lexemes;
@@ -92,6 +137,8 @@ namespace ShrimpleDB
 			else if (token == "(") return ParserToken.ParenthesisOpen;
 			else if (token == ")") return ParserToken.ParenthesisClose;
 			else if (token == ",") return ParserToken.Comma;
+			else if (
+				token.StartsWith('"') && token.EndsWith('"')) return ParserToken.Str;
 			else return ParserToken.Identifier;
 		}
 
@@ -114,9 +161,9 @@ namespace ShrimpleDB
 					else if (GetTokenType(lexemes[1]) == ParserToken.ParenthesisOpen)
 					{
 						//traverse until the paired ')' is encountered
-						int parity = 1;
+						int parity = 0;
 						List<string> sublexemes = [];
-						for (int j = 2; j < lexemes.Count; j++)
+						for (int j = 1; j < lexemes.Count; j++)
 						{
 							switch (GetTokenType(lexemes[j]))
 							{
@@ -131,7 +178,7 @@ namespace ShrimpleDB
 						if (parity != 0)
 							throw new SDBException(se_str + "Unmatched parenthesis");
 
-						List<ASTNode> parameter_nodes = Parse(sublexemes, ParserHint.ParameterList);
+						List<ASTNode> parameter_nodes = Parse(sublexemes[1..], ParserHint.ParameterList);
 						function.Children = parameter_nodes;
 					}
 					return [function];
@@ -142,6 +189,11 @@ namespace ShrimpleDB
 				else if (GetTokenType(lexeme) == ParserToken.Identifier)
 				{
 					return [new ASTNode(ParserToken.Identifier, lexeme)];
+				}
+
+				else if (GetTokenType(lexeme) == ParserToken.Str)
+				{
+					return [new ASTNode(ParserToken.Str, lexeme[1..^1])];
 				}
 
 				else
@@ -214,6 +266,11 @@ namespace ShrimpleDB
 						continue;
 					}
 
+					else if (GetTokenType(lexeme) == ParserToken.Str)
+					{
+						parameters.Add(new ASTNode(ParserToken.Str, lexeme[1..^1]));
+					}
+
 					else
 					{
 						throw new SDBException(se_str + "Unexpected '(' or ')' ");
@@ -224,5 +281,64 @@ namespace ShrimpleDB
 			}
 		}
 
+		public static void StaticAnalysis(List<ASTNode> nodes)
+		{
+			nodes[0].Traverse((node, _) =>
+			{
+				if(node.Type ==  ParserToken.Function)
+				{
+					// - Sorry TDD i don't think you can qualify as a development practice
+					// - This is bullshit, you let defensive programming in
+					// - DP is an important step in developer's life how about you read a book
+					if (!QLStd.FuncDispatchTable.TryGetValue(node.Value, out QLStd.FunctionInfo? f_info))
+						throw new SDBException(ste_str + $"Function not found: ${node.Value}");
+
+					var argcount = node.Children.Count;
+
+					if(argcount != f_info.FnArgs.Length)
+						throw new SDBException(ste_str + $"${node.Value} argument count mismatch: {argcount} ({f_info.FnArgs.Length} expected)");
+
+					int argindex = 0;
+					foreach( var arg in node.Children )
+					{
+						var expected_arg_type = f_info.FnArgs[argindex];
+						if (arg.Type == ParserToken.Function)
+						{
+							if (!QLStd.FuncDispatchTable.TryGetValue(arg.Value, out QLStd.FunctionInfo? subfn))
+								throw new SDBException(ste_str + $"Function not found: ${node.Value}");
+
+							if (subfn.ReturnType != expected_arg_type)
+								throw new SDBException(
+									ste_str
+									+ $"Invalid ${arg.Value} return type for enclosing argument {argindex + 1}:"  +
+									$"{subfn.ReturnType} ({expected_arg_type} expected) in ${node.Value}");
+						}
+						else if (arg.Type != expected_arg_type)
+							throw new SDBException(
+									ste_str
+									+ $"Invalid type for enclosing argument {argindex + 1}: " +
+									$"{arg.Type} ({expected_arg_type} expected) in ${node.Value}");
+						++argindex; 
+					}
+				}
+			}, 0);
+		}
+
+		public static ASTNode Evaluate(ASTNode node)
+		{
+			switch(node.Type)
+			{
+				case ParserToken.Function:
+					var f_info = QLStd.FuncDispatchTable[node.Value];
+					foreach( var child in node.Children)
+					{
+						QLStd.Arguments.Add(Evaluate(child));
+					}
+					f_info.Action();
+					QLStd.Arguments.Clear();
+					return QLStd.Return;
+				default: return node;
+			}
+		}
 	}
 }

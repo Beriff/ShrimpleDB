@@ -7,6 +7,14 @@
     <LangVersion>preview</LangVersion>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <NoWarn>1701;1702;S1104;S3604</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <NoWarn>1701;1702;S1104;S3604</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="ConFlag" Version="1.0.0" />
   </ItemGroup>
