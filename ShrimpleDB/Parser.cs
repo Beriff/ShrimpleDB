@@ -1,4 +1,5 @@
-﻿using System;
+﻿
+using System;
 
 namespace ShrimpleDB
 {
@@ -37,7 +38,9 @@ namespace ShrimpleDB
 		Identifier,
 		Comma,
 		Number,
-		Str
+		Str,
+		Any,
+		None
 	}
 
 	public static class QLStd
@@ -50,23 +53,53 @@ namespace ShrimpleDB
 		}
 
 		public static readonly List<ASTNode> Arguments = [];
-		public static ASTNode Return;
+		public static ASTNode? Return;
+		public static Interpreter BoundInterpreter;
 
 		public static readonly Dictionary<string, FunctionInfo> FuncDispatchTable = new()
 		{
-			{ 
+			{
 				"PRINT", new(() =>
 				{
 					Console.WriteLine(Arguments[0].Value);
-				}, [ParserToken.Str], null) 
+				}, [ParserToken.Any], null)
+			},
+			{
+				"CONCAT", new(() =>
+				{
+					Return = new(ParserToken.Str, Arguments[0].Value + Arguments[1].Value);
+				}, [ParserToken.Str, ParserToken.Str], ParserToken.Str)
+			},
+			{
+				"END", new(() => BoundInterpreter.ShutdownSignal = true, [], null)
+			},
+			{
+				"VAR", new(() =>
+				{
+					BoundInterpreter.Variables[Arguments[0].Value] = Arguments[1];
+				}, [ParserToken.Str, ParserToken.Any], null)
+			},
+			{
+				"ADD", new(() =>
+				{
+					Return = new(ParserToken.Number, 
+						(float.Parse(Arguments[0].Value) + 
+						float.Parse(Arguments[1].Value)).ToString());
+				}, [ParserToken.Number, ParserToken.Number], ParserToken.Number)
 			}
 		};
 	}
 
 	public class Interpreter
 	{
-		private const string se_str = "\e[41m SYNTAX ERROR \e[0m ";
-		private const string ste_str = "\e[41m STATIC ERROR \e[0m ";
+		private const string se_str = "\e[41mSYNTAX ERROR\e[0m ";
+		private const string ste_str = "\e[41mSTATIC ERROR\e[0m ";
+		private const string re_str = "\e[41mRUNTIME ERROR\e[0m ";
+		public Dictionary<string, ASTNode> Variables = [];
+		public bool ShutdownSignal = false;
+
+		public Interpreter() { QLStd.BoundInterpreter = this; }
+
 		public List<string> LexicalAnalysis(string instruction)
 		{
 			bool string_flag = false;
@@ -139,6 +172,7 @@ namespace ShrimpleDB
 			else if (token == ",") return ParserToken.Comma;
 			else if (
 				token.StartsWith('"') && token.EndsWith('"')) return ParserToken.Str;
+			else if (float.TryParse(token, out _)) return ParserToken.Number;
 			else return ParserToken.Identifier;
 		}
 
@@ -218,63 +252,58 @@ namespace ShrimpleDB
 					// belonging to the current parameter list, count
 					// the parenthesis
 
-					if (GetTokenType(lexeme) == ParserToken.Function)
+					switch(GetTokenType(lexeme))
 					{
-						if (GetTokenType(lexemes[index + 1]) != ParserToken.ParenthesisOpen)
-							throw new SDBException(se_str + "Expected parenthesis");
+						case ParserToken.Function:
+							if (GetTokenType(lexemes[index + 1]) != ParserToken.ParenthesisOpen)
+								throw new SDBException(se_str + "Expected parenthesis");
 
-						ASTNode function = new(ParserToken.Function, lexeme[1..]);
+							ASTNode function = new(ParserToken.Function, lexeme[1..]);
 
-						List<string> parameter_lexemes = [];
-						int parity = 1;
-						int new_index = 0;
-						for (int j = index + 2; j < lexemes.Count; j++)
-						{
-							switch (GetTokenType(lexemes[j]))
+							List<string> parameter_lexemes = [];
+							int parity = 1;
+							int new_index = 0;
+							for (int j = index + 2; j < lexemes.Count; j++)
 							{
-								case ParserToken.ParenthesisOpen: parity++; break;
-								case ParserToken.ParenthesisClose: parity--; break;
-								case ParserToken.Comma: break;
-								default: break;
+								switch (GetTokenType(lexemes[j]))
+								{
+									case ParserToken.ParenthesisOpen: parity++; break;
+									case ParserToken.ParenthesisClose: parity--; break;
+									case ParserToken.Comma: break;
+									default: break;
+								}
+
+								if (parity == 0)
+								{
+									new_index = j;
+									break;
+								}
+								parameter_lexemes.Add(lexemes[j]);
 							}
 
-							if (parity == 0)
-							{
-								new_index = j;
-								break;
-							}
-							parameter_lexemes.Add(lexemes[j]);
-						}
+							if (parity != 0)
+								throw new SDBException(se_str + "Unmatched parenthesis");
 
-						if (parity != 0)
-							throw new SDBException(se_str + "Unmatched parenthesis");
+							index = new_index + 1;
+							var parsed_parameters = Parse(parameter_lexemes, ParserHint.ParameterList);
+							function.Children = parsed_parameters;
+							parameters.Add(function);
 
-						index = new_index + 1;
-						var parsed_parameters = Parse(parameter_lexemes, ParserHint.ParameterList);
-						function.Children = parsed_parameters;
-						parameters.Add(function);
+							break;
 
+						case ParserToken.Identifier:
+							parameters.Add(new(ParserToken.Identifier, lexeme)); break;
+						case ParserToken.Comma: continue;
+						case ParserToken.Str:
+							parameters.Add(new ASTNode(ParserToken.Str, lexeme[1..^1]));
+							break;
+						case ParserToken.Number:
+							parameters.Add(new ASTNode(ParserToken.Number, lexeme));
+							break;
+						default:
+							throw new SDBException(se_str + "Unexpected '(' or ')' ");
 					}
 
-					else if (GetTokenType(lexeme) == ParserToken.Identifier)
-					{
-						parameters.Add(new(ParserToken.Identifier, lexeme));
-					}
-
-					else if (GetTokenType(lexeme) == ParserToken.Comma)
-					{
-						continue;
-					}
-
-					else if (GetTokenType(lexeme) == ParserToken.Str)
-					{
-						parameters.Add(new ASTNode(ParserToken.Str, lexeme[1..^1]));
-					}
-
-					else
-					{
-						throw new SDBException(se_str + "Unexpected '(' or ')' ");
-					}
 				}
 
 				return parameters;
@@ -307,12 +336,14 @@ namespace ShrimpleDB
 							if (!QLStd.FuncDispatchTable.TryGetValue(arg.Value, out QLStd.FunctionInfo? subfn))
 								throw new SDBException(ste_str + $"Function not found: ${node.Value}");
 
-							if (subfn.ReturnType != expected_arg_type)
+							if (subfn.ReturnType != expected_arg_type && (expected_arg_type != ParserToken.Any || subfn.ReturnType == null) )
 								throw new SDBException(
 									ste_str
-									+ $"Invalid ${arg.Value} return type for enclosing argument {argindex + 1}:"  +
-									$"{subfn.ReturnType} ({expected_arg_type} expected) in ${node.Value}");
+									+ $"Invalid ${arg.Value} return type for enclosing argument {argindex + 1}: "  +
+									$"{subfn.ReturnType ?? ParserToken.None} ({expected_arg_type} expected) in ${node.Value}");
 						}
+						else if (expected_arg_type == ParserToken.Any
+						|| arg.Type == ParserToken.Identifier) { }
 						else if (arg.Type != expected_arg_type)
 							throw new SDBException(
 									ste_str
@@ -324,21 +355,28 @@ namespace ShrimpleDB
 			}, 0);
 		}
 
-		public static ASTNode Evaluate(ASTNode node)
+		public ASTNode? Evaluate(ASTNode node)
 		{
-			switch(node.Type)
+			QLStd.Return = null;
+			switch (node.Type)
 			{
 				case ParserToken.Function:
 					var f_info = QLStd.FuncDispatchTable[node.Value];
 					foreach( var child in node.Children)
 					{
-						QLStd.Arguments.Add(Evaluate(child));
+						QLStd.Arguments.Add(Evaluate(child)!);
 					}
 					f_info.Action();
 					QLStd.Arguments.Clear();
 					return QLStd.Return;
+				case ParserToken.Identifier:
+					if (Variables.TryGetValue(node.Value, out ASTNode? value))
+					{ return value; }
+					else
+					{ throw new SDBException(re_str + $"Unknown identifier: {node.Value}"); }
 				default: return node;
 			}
+
 		}
 	}
 }

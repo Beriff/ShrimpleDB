@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "ShrimpleShell": {
+      "commandName": "Project",
+      "commandLineArgs": "--no-empty-return\r\n"
+    }
+  }
+}

@@ -1,69 +1,37 @@
 ﻿using ShrimpleDB;
+using ConFlag;
 
 namespace ShrimpleShell
 {
 	internal class Program
 	{
-		static void Main(string[] args)
+		static string prefix_in = "ebi |< ";
+		static string prefix_out = "ebi >| ";
+
+		static bool EmptyReturns = true;
+
+		static void Prompt(Interpreter interpreter)
 		{
-			const string prefix_in = "ShrimpShell|> ";
-			const string prefix_out = "ShrimpShell<| ";
 
 			Console.Write(prefix_in);
-			ConsoleKeyInfo input;
-			var buffer = "";
-			var processed = prefix_in;
 
-			while ( (input = Console.ReadKey(true)).Key != ConsoleKey.Enter )
-			{
-				Console.SetCursorPosition(0,0);
-
-				char a = input.KeyChar;
-				if (input.Modifiers == ConsoleModifiers.Shift)
-					a = a.ToString().ToUpper()[0];
-
-				buffer += a;
-
-				string highlight = "";
-				bool str_highlight = false;
-				for (int i = 0; i < buffer.Length; i++)
-				{
-					if (buffer[i] == '"') { str_highlight = !str_highlight; }
-					else
-					{
-						if (buffer[i] == '$') { highlight = "\e[36;1m"; }
-						else if (buffer[i] == '(') { highlight = ""; }
-					}
-
-					if (buffer[i] == '"') { processed += "\e[32m\"\e[0m"; } else
-					{
-						processed += (str_highlight ? "\e[32m" : highlight) + buffer[i] + "\e[0m";
-					}
-				}
-
-				Console.Write(processed);
-				processed = prefix_in;
-			}
-
-			Console.Write('\n');
-
-			var interpreter = new Interpreter();
-			var lexemes = interpreter.LexicalAnalysis(buffer);
+			var lexemes = interpreter.LexicalAnalysis(Console.ReadLine());
 
 			ASTNode tree;
 			try
 			{
 				tree = Interpreter.Parse(lexemes)[0];
 				Interpreter.StaticAnalysis([tree]);
-				ASTNode? final = Interpreter.Evaluate(tree);
-				if(final == null)
+				ASTNode? final = interpreter.Evaluate(tree);
+				if (final == null && EmptyReturns)
 				{
 					Console.WriteLine(prefix_out + "(returned nothing)");
-				} else
+				}
+				else if (final != null)
 				{
 					Console.WriteLine(prefix_out + final.Value);
 				}
-				
+
 
 
 				/*tree.Traverse((n, f) => 
@@ -80,6 +48,25 @@ namespace ShrimpleShell
 				Console.WriteLine($"{e.Message}");
 				return;
 			}
+		}
+		static void Main(string[] args)
+		{
+			//processing the cmd flags
+			var arguments = new Arguments(args);
+
+			if(arguments.Options.ContainsKey("no-prefix"))
+				prefix_in = prefix_out = "";
+
+			if (arguments.Options.ContainsKey("no-empty-return"))
+				EmptyReturns = false;
+
+			var interpreter = new Interpreter();
+
+			while(!interpreter.ShutdownSignal)
+			{
+				Prompt(interpreter);
+			}
+			
 		}
 	}
 }
